@@ -2,8 +2,14 @@
 
 const cf = require('cloudfriend');
 const crypto = require('crypto');
+const Parameters = {};
 const Resources = {};
 const Outputs = {};
+
+Parameters.GithubAccessToken = {
+  Type: 'String',
+  Description: 'Github token with permission to clone the documentation-service repository'
+};
 
 Resources.BuildBucket = {
   Type: 'AWS::S3::Bucket',
@@ -79,6 +85,10 @@ Resources.BuildProject = {
       ]
     },
     ServiceRole: cf.getAtt('BuildRole', 'Arn'),
+    Source: {
+      Type: 'GITHUB',
+      Location: cf.sub('https://${GithubAccessToken}@github.com/rclark/documentation-service.git')
+    },
     Artifacts: { Type: 'NO_ARTIFACTS' }
   }
 };
