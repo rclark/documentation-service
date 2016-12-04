@@ -4,7 +4,7 @@ set -eu
 
 echo "You've started a documentation-service build!"
 
-export NVM_DIR="/usr/local/nvm"
+# shellcheck source=/usr/local/nvm
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 echo "Should say nvm: $(command -v nvm)"
 

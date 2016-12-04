@@ -2,13 +2,46 @@
 
 const cf = require('cloudfriend');
 const crypto = require('crypto');
+
 const Parameters = {};
 const Resources = {};
 const Outputs = {};
 
-Parameters.GithubAccessToken = {
+Parameters.BundleBucket = {
   Type: 'String',
-  Description: 'Github token with permission to clone the documentation-service repository'
+  Description: 'The S3 bucket containing the lambda bundle.zip',
+  Default: 'cf-templates-flbneh43iejh-us-east-1'
+};
+
+Parameters.BundleKey = {
+  Type: 'String',
+  Description: 'The S3 key for the lambda bundle.zip',
+  Default: 'documentation-service-bundle.zip'
+};
+
+Resources.BuildEnvironmentRepository = {
+  Type: 'AWS::ECR::Repository',
+  Properties: {
+    RepositoryName: 'documentation-service',
+    RepositoryPolicyText: {
+      'Version': '2012-10-17',
+      Statement: {
+        Effect: 'Allow',
+        Action: [
+          'ecr:GetDownloadUrlForLayer',
+          'ecr:BatchGetImage',
+          'ecr:BatchCheckLayerAvailability'
+        ],
+        Principal: {
+          AWS: [
+            'arn:aws:iam::201349592320:root',
+            'arn:aws:iam::570169269855:root',
+            'arn:aws:iam::964771811575:root'
+          ]
+        }
+      }
+    }
+  }
 };
 
 Resources.BuildBucket = {
@@ -16,6 +49,14 @@ Resources.BuildBucket = {
   DeletionPolicy: 'Retain',
   Properties: {
     BucketName: cf.sub('${AWS::StackName}-output')
+  }
+};
+
+Resources.BuildLogGroup = {
+  Type: 'AWS::Logs::LogGroup',
+  Properties: {
+    LogGroupName: cf.sub('/aws/codebuild/${AWS::StackName}'),
+    RetentionInDays: 14
   }
 };
 
@@ -45,8 +86,8 @@ Resources.BuildRole = {
                 'logs:PutLogEvents'
               ],
               Resource: [
-                cf.sub('arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/documentation-service'),
-                cf.sub('arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/documentation-service:*')
+                cf.sub('arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${BuildLogGroup}'),
+                cf.sub('arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${BuildLogGroup}:*')
               ]
             }
           ]
@@ -81,13 +122,14 @@ Resources.BuildProject = {
       Image: cf.sub('${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/documentation-service:latest'),
       Type: 'LINUX_CONTAINER',
       EnvironmentVariables: [
+        { Name: 'NVM_DIR', Value: '/usr/local/nvm' },
         { Name: 'BUILD_BUCKET', Value: cf.ref('BuildBucket') }
       ]
     },
     ServiceRole: cf.getAtt('BuildRole', 'Arn'),
     Source: {
       Type: 'GITHUB',
-      Location: cf.sub('https://${GithubAccessToken}@github.com/rclark/documentation-service.git')
+      Location: cf.sub('https://github.com/rclark/documentation-service.git')
     },
     Artifacts: { Type: 'NO_ARTIFACTS' }
   }
@@ -123,6 +165,16 @@ Outputs.WebhookSecret = {
   Value: cf.ref('WebhookSecret')
 };
 
+const functionName = '${AWS::StackName}-webhook';
+
+Resources.WebhookLogGroup = {
+  Type: 'AWS::Logs::LogGroup',
+  Properties: {
+    LogGroupName: cf.sub(`/aws/lambda/${functionName}`),
+    RetentionInDays: 7
+  }
+};
+
 Resources.WebhookFunctionRole = {
   Type: 'AWS::IAM::Role',
   Properties: {
@@ -143,8 +195,31 @@ Resources.WebhookFunctionRole = {
           Statement: [
             {
               Effect: 'Allow',
-              Action: 'logs:*',
-              Resource: 'arn:aws:logs:*'
+              Action: [
+                'logs:CreateLogGroup',
+                'logs:CreateLogStream',
+                'logs:PutLogEvents'
+              ],
+              Resource: [
+                cf.sub('arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${WebhookLogGroup}'),
+                cf.sub('arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${WebhookLogGroup}:*')
+              ]
+            }
+          ]
+        }
+      },
+      {
+        PolicyName: 'start-build',
+        PolicyDocument: {
+          Statement: [
+            {
+              Effect: 'Allow',
+              Action: [
+                'codebuild:StartBuild'
+              ],
+              Resource: [
+                cf.getAtt('BuildProject', 'Arn')
+              ]
             }
           ]
         }
@@ -156,6 +231,7 @@ Resources.WebhookFunctionRole = {
 Resources.WebhookFunction = {
   Type: 'AWS::Lambda::Function',
   Properties: {
+    FunctionName: cf.sub(functionName),
     Role: cf.getAtt('WebhookFunctionRole', 'Arn'),
     Description: cf.sub('[${AWS::StackName}] Handle authorization and launch builds'),
     Handler: 'index.launch',
@@ -163,33 +239,14 @@ Resources.WebhookFunction = {
     Timeout: 30,
     MemorySize: 128,
     Code: {
-      ZipFile: cf.join('\n', [
-        'var AWS = require("aws-sdk");',
-        'var crypto = require("crypto");',
-        'var cb = new AWS.CodeBuild({ region });',
-        cf.sub('var region = "${AWS::Region}";'),
-        cf.sub('var sns = new AWS.SNS({ region });'),
-        cf.sub('var project = "${BuildProject}";'),
-        cf.sub('var secret = "${WebhookSecret}";'),
-        'module.exports.webhooks = function(event, context, callback) {',
-        '  var body = event.body',
-        '  var hash = "sha1=" + crypto.createHmac("sha1", secret).update(new Buffer(JSON.stringify(body))).digest("hex");',
-        '  if (event.signature !== hash) return context.done("invalid: signature does not match");',
-        '  if (body.zen) return context.done(null, "ignored ping request");',
-        '  cb.startBuild({',
-        '    projectName: project,',
-        '    environmentVariablesOverride: [',
-        '      { name: "GIT_REF", value: event.body.ref },',
-        '      { name: "GIT_AFTER", value: event.body.after },',
-        '      { name: "GIT_BEFORE", value: event.body.before },',
-        '      { name: "GIT_DELETED", value: event.body.deleted },',
-        '      { name: "GIT_NAME", value: event.body.repository.name },',
-        '      { name: "GIT_OWNER", value: event.body.repository.owner.name },',
-        '      { name: "GIT_PUSHER", value: event.body.pusher.name },',
-        '    ]',
-        '  }, callback);',
-        '};'
-      ])
+      S3Bucket: cf.ref('BundleBucket'),
+      S3Key: cf.ref('BundleKey')
+    },
+    Environment: {
+      Variables: {
+        BUILD_PROJECT: cf.ref('BuildProject'),
+        WEBHOOK_SECRET: cf.ref('WebhookSecret')
+      }
     }
   }
 };
@@ -234,22 +291,30 @@ Resources.WebhookMethod = {
 };
 
 const deploymentName = crypto.randomBytes(8).toString('hex');
+
 Resources[deploymentName] = {
   Type: 'AWS::ApiGateway::Deployment',
   DependsOn: 'WebhookMethod',
   Properties: {
     RestApiId: cf.ref('WebhookApi'),
+    StageName: 'unused'
+  }
+};
+
+Resources.WebhookStage = {
+  Type: 'AWS::ApiGateway::Stage',
+  Properties: {
+    DeploymentId: cf.ref(deploymentName),
     StageName: 'documentation',
-    StageDescription: {
-      MethodSettings: [
-        {
-          HttpMethod: '*',
-          ResourcePath: '/*',
-          ThrottlingBurstLimit: 30,
-          ThrottlingRateLimit: 10
-        }
-      ]
-    }
+    RestApiId: cf.ref('WebhookApi'),
+    MethodSettings: [
+      {
+        HttpMethod: '*',
+        ResourcePath: '/*',
+        ThrottlingBurstLimit: 30,
+        ThrottlingRateLimit: 10
+      }
+    ]
   }
 };
 
@@ -257,4 +322,4 @@ Outputs.WebhookEndpoint = {
   Value: cf.sub('https://${WebhookApi}.execute-api.${AWS::Region}.amazonaws.com/documentation/build')
 };
 
-module.exports = { Resources, Outputs };
+module.exports = { Parameters, Resources, Outputs };

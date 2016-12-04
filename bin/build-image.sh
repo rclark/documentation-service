@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# Prerequisites: awscli
+
 set -eux
 
 # Log docker client into ECR

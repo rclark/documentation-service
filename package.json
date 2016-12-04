@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "build-bundle": "bin/build-bundle.sh",
     "build-template": "build-template cloudformation/documentation-service.template.js > cloudformation/documentation-service.template.json",
     "build-image": "bin/build-image.sh",
     "test": "nyc tape test/*.test.js"
@@ -18,9 +19,11 @@
     "url": "https://github.com/documentationjs/service/issues"
   },
   "homepage": "https://github.com/documentationjs/service#readme",
+  "dependencies": {
+    "aws-sdk": "^2.7.10"
+  },
   "devDependencies": {
     "@mapbox/mock-aws-sdk-js": "0.0.4",
-    "aws-sdk": "^2.7.10",
     "cloudfriend": "^1.7.0",
     "eslint": "^3.11.1",
     "eslint-plugin-node": "^3.0.5",
