@@ -1,5 +1,5 @@
 {
-  "name": "service",
+  "name": "documentation-service",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -11,14 +11,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/documentationjs/service.git"
+    "url": "git+https://github.com/rclark/documentation-service.git"
   },
   "author": "Ryan Clark",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/documentationjs/service/issues"
+    "url": "https://github.com/rclark/documentation-service/issues"
   },
-  "homepage": "https://github.com/documentationjs/service#readme",
+  "homepage": "https://github.com/rclark/documentation-service#readme",
   "dependencies": {
     "aws-sdk": "^2.7.10"
   },
